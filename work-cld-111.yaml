@@ -1,0 +1,289 @@
+heat_template_version: 2013-05-23
+
+description: >
+  CHKP - LAB - Vsec 
+parameters:
+  R77_3_port_2_ip:
+    type: string
+    description: Private IP address BIG-IP is assigned on client private network
+    default: 10.1.0.10
+  R77_3_port_1_ip:
+    type: string
+    description: Private IP address BIG-IP is assigned on client private network
+    default: 10.0.0.10
+  webapp_port_1_ip:
+    type: string
+    description: Private IP address BIG-IP is assigned on client private network
+    default: 10.1.0.81
+  floating:
+    type: string
+    description: uuid/name of a network to use for floating ip addresses
+    default:  floating
+  key_name:
+    type: string
+    description: Name of keypair to assign to servers
+  image:
+    type: string
+    description: Name of image to use for servers
+  imageR77:
+    type: string
+    description: Name of image to use for servers
+  flavor:
+    type: string
+    description: Flavor to use for servers
+  flavorR77:
+    type: string
+    description: Flavor to use for servers R773
+  public_net:
+    type: string
+    description: >
+      ID or name of public network for which floating IP addresses will be allocated
+#External net
+  external_net_name:
+    type: string
+    description: Name of external network to be created
+  external_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+  external_net_gateway:
+    type: string
+    description: Private network gateway address
+  external_net_pool_start:
+    type: string
+    description: Start of external network IP address allocation pool
+  external_net_pool_end:
+    type: string
+    description: End of external network IP address allocation pool
+#Internal net
+  internal_net_name:
+    type: string
+    description: Name of external network to be created
+  internal_net_cidr:
+    type: string
+    description: Private network address (CIDR notation)
+  internal_net_gateway:
+    type: string
+    description: Private network gateway address
+  internal_net_pool_start:
+    type: string
+    description: Start of external network IP address allocation pool
+  internal_net_pool_end:
+    type: string
+    description: End of external network IP address allocation pool
+  password:
+    type: string
+    description: admin account password
+    default: linux
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 41 }
+        description: password must be between 1 and 41 characters
+      - allowed_pattern: '[a-zA-Z0-9]*'
+        description: password must contain only alphanumeric characters
+
+  db_name:
+    type: string
+    description: WordPress database name
+    default: wordpress
+    constraints:
+      - length: { min: 1, max: 64 }
+        description: db_name must be between 1 and 64 characters
+      - allowed_pattern: '[a-zA-Z][a-zA-Z0-9]*'
+        description: >
+          db_name must begin with a letter and contain only alphanumeric
+          characters
+  db_username:
+    type: string
+    description: The WordPress database admin account username
+    default: admin
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 16 }
+        description: db_username must be between 1 and 16 characters
+      - allowed_pattern: '[a-zA-Z][a-zA-Z0-9]*'
+        description: >
+          db_username must begin with a letter and contain only alphanumeric
+          characters
+  db_password:
+    type: string
+    description: The WordPress database admin account password
+    default: admin
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 41 }
+        description: db_password must be between 1 and 41 characters
+      - allowed_pattern: '[a-zA-Z0-9]*'
+        description: db_password must contain only alphanumeric characters
+  db_root_password:
+    type: string
+    description: Root password for MySQL
+    default: admin
+    hidden: true
+    constraints:
+      - length: { min: 1, max: 41 }
+        description: db_root_password must be between 1 and 41 characters
+      - allowed_pattern: '[a-zA-Z0-9]*'
+        description: db_root_password must contain only alphanumeric characters
+
+resources:
+  external_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: external_net_name }
+
+  external_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: external_net }
+      cidr: { get_param: external_net_cidr }
+      gateway_ip: { get_param: external_net_gateway }
+      allocation_pools:
+        - start: { get_param: external_net_pool_start }
+          end: { get_param: external_net_pool_end }
+
+  internal_net:
+    type: OS::Neutron::Net
+    properties:
+      name: { get_param: internal_net_name }
+
+  internal_subnet:
+    type: OS::Neutron::Subnet
+    properties:
+      network_id: { get_resource: internal_net }
+      cidr: { get_param: internal_net_cidr }
+      gateway_ip: { get_param: internal_net_gateway }
+      allocation_pools:
+        - start: { get_param: internal_net_pool_start }
+          end: { get_param: internal_net_pool_end }
+
+  router:
+    type: OS::Neutron::Router
+    properties:
+      external_gateway_info:
+        network: { get_param: public_net }
+
+  router_interface:
+    type: OS::Neutron::RouterInterface
+    properties:
+      router_id: { get_resource: router }
+      subnet_id: { get_resource: external_subnet }
+
+  secgroup_base:
+    type: OS::Neutron::SecurityGroup
+    properties:
+      rules:
+        - protocol: icmp
+        - protocol: tcp
+          port_range_min: 22
+          port_range_max: 22
+        - protocol: tcp
+          port_range_min: 80
+          port_range_max: 80
+        - protocol: tcp
+          port_range_min: 443
+          port_range_max: 443
+
+  webapp:
+    type: OS::Nova::Server
+    properties:
+      name: Webapp
+      image: { get_param: image }
+      flavor: { get_param: flavor }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: webapp_port_1 }
+      user_data:
+        str_replace:
+          template: |
+            #!/bin/bash -v
+
+            yum -y install mariadb mariadb-server httpd wordpress
+            touch /var/log/mariadb/mariadb.log
+            chown mysql.mysql /var/log/mariadb/mariadb.log
+            systemctl start mariadb.service
+
+            # Setup MySQL root password and create a user
+            mysqladmin -u root password db_rootpassword
+            cat << EOF | mysql -u root --password=db_rootpassword
+            CREATE DATABASE db_name;
+            GRANT ALL PRIVILEGES ON db_name.* TO "db_user"@"localhost"
+            IDENTIFIED BY "db_password";
+            FLUSH PRIVILEGES;
+            EXIT
+            EOF
+
+            sed -i "/Deny from All/d" /etc/httpd/conf.d/wordpress.conf
+            sed -i "s/Require local/Require all granted/" /etc/httpd/conf.d/wordpress.conf
+            sed -i s/database_name_here/db_name/ /etc/wordpress/wp-config.php
+            sed -i s/username_here/db_user/ /etc/wordpress/wp-config.php
+            sed -i s/password_here/db_password/ /etc/wordpress/wp-config.php
+
+            systemctl start httpd.service
+          params:
+            db_rootpassword: { get_param: db_root_password }
+            db_name: { get_param: db_name }
+            db_user: { get_param: db_username }
+            db_password: { get_param: db_password }
+
+  webapp_port_1:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: internal_net }
+      security_groups:
+        - { get_resource: secgroup_base }
+      fixed_ips:       
+        - subnet_id: { get_resource: internal_subnet }
+          ip_address: { get_param: webapp_port_1_ip }
+#      fixed_ips: [{"subnet": "internal_subnet", "ip_address": 10.1.0.81}]
+
+  R77-3_instance:
+    type: OS::Nova::Server
+    #depends_on:
+    #  - extrouter_inside
+    properties:
+      name: chkvsec
+      image: { get_param: imageR77 }
+      flavor: { get_param: flavorR77 }
+      key_name: { get_param: key_name }
+      networks:
+        - port: { get_resource: R77_3_port_1 }
+        - port: { get_resource: R77_3_port_2 }
+      user_data:
+        str_replace:
+          template: |
+            set user admin password-hash $1$lICtM9Cs$x4w0ZcqmObnXBl2Q3OkG61
+            config_system -s 'install_security_gw=true&install_ppak=true&install_security_managment=true&install_mgmt_primary=true&install_mds_primary=false&mgmt_admin_name=admin&mgmt_admin_passwd=linux&mgmt_gui_clients_radio=any'
+          params:
+            password: { get_param: password } 
+
+  R77_3_port_1:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: external_net }
+      security_groups:
+        - { get_resource: secgroup_base }
+      fixed_ips:
+        - subnet_id: { get_resource: external_subnet }
+          ip_address: { get_param: R77_3_port_1_ip }
+
+  R77_3_port_2:
+    type: OS::Neutron::Port
+    properties:
+      network_id: { get_resource: internal_net }
+      fixed_ips:
+        - subnet_id: { get_resource: internal_subnet }
+          ip_address: { get_param: R77_3_port_2_ip }
+
+outputs:
+#  chkvsec_external_ip:
+#    description: IP address of server1 in external network
+#    value: { get_attr: [ chkvsec, first_address ] }
+#  server1_public_ip:
+#    description: Floating IP address of server1 in public network
+#    value: { get_attr: [ server1_floating_ip, floating_ip_address ] }
+#  server2_external_ip:
+#    description: IP address of server2 in external network
+#    value: { get_attr: [ server2, first_address ] }
+#  server2_public_ip:
+#    description: Floating IP address of server2 in public network
+#    value: { get_attr: [ server2_floating_ip, floating_ip_address ] }
